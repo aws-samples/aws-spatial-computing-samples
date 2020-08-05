@@ -1,11 +1,6 @@
-## My Project
+## AWS Spatial Computing Samples
 
-TODO: Fill this README out!
-
-Be sure to:
-
-* Change the title in this README
-* Edit your repository description on GitHub
+This repository contains sample code for Spatial Computing applications on AWS
 
 ## Security
 
