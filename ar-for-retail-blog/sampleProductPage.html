@@ -1,0 +1,171 @@
+<!--  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.  -->
+<!--  SPDX-License-Identifier: MIT  -->
+<html>
+<head>
+  <title>AR Example</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+
+  <!-- 💁 Include both scripts below to support all browsers! -->
+
+  <!-- Loads <model-viewer> for modern browsers: -->
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.js"> </script>
+
+  <!-- Loads <model-viewer> for old browsers like IE11: -->
+  <script nomodule src="https://unpkg.com/@google/model-viewer/dist/model-viewer-legacy.js"> </script>
+
+  <!-- The following libraries and polyfills are recommended to maximize browser support -->
+  <!-- NOTE: you must adjust the paths as appropriate for your project -->
+      
+  <!-- 🚨 REQUIRED: Web Components polyfill to support Edge and Firefox < 63 -->
+  <script src="https://unpkg.com/@webcomponents/webcomponentsjs@2.1.3/webcomponents-loader.js"></script>
+
+  <!-- 💁 OPTIONAL: Intersection Observer polyfill for better performance in Safari and IE11 -->
+  <script src="https://unpkg.com/intersection-observer@0.5.1/intersection-observer.js"></script>
+
+  <!-- 💁 OPTIONAL: Resize Observer polyfill improves resize behavior in non-Chrome browsers -->
+  <script src="https://unpkg.com/resize-observer-polyfill@1.5.1/dist/ResizeObserver.js"></script>
+
+  <!-- 🚨 REQUIRED: QRCode generator used to show URL on non-mobile browsers -->
+  <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
+
+  <style>
+    #page {
+      /* Disable all browser panning and zooming gestures */
+      touch-action: none;
+      
+      /* Prevent long presses from being interpreted as text selection. */
+      -webkit-user-select:none;
+      -khtml-user-select:none;
+      -moz-user-select:none;
+      -ms-user-select:none;
+      user-select:none;
+      margin: 0;
+     
+      background-color: white;
+    }
+    #anchor-container {
+      padding-top: 80px;
+      align-items: center;
+    }
+    #view-in-ar-anchor {
+      font: 20px Arial, sans-serif;
+      font-weight: 600;
+      color: #4285f4;
+      background-color: lightblue;
+      text-align: center;
+      padding: 16px 27px;
+      border-radius: 60px;
+      pointer-events: auto;
+      text-decoration: none;
+    }
+    #qrcode-container {
+      display: none;      /* hide by default*/
+      top: 20px;
+      left: 40;
+      position: absolute;
+      z-index: 10;
+      padding: 20px 20px 20px 20px;
+    }
+    #qrcode {
+      width: 250px;
+      height: 250px;
+    }
+    #attribution {
+      font: 10px Arial, sans-serif;
+      position: absolute;
+      bottom: 10px;
+      padding: 10px 10px;
+    }
+    h1 {
+      font: 20px Arial, sans-serif;
+      font-weight: 600;
+    }
+    p {
+      padding: 10px;
+      font-family: Arial, sans-serif;
+    }
+    model-viewer {
+      height: 250px;
+    }
+  </style>
+</head>
+<body id="page">
+  <h1><em>ExampleStore.com</em></h1>
+  <table>
+    <tr>
+      <td>
+        <div id=qrcode-container>
+          <div id='qrcode'>
+          </div>
+          <p>Point your mobile device camera here <br>to view in Augmented Reality.</p>
+        </div>
+
+        <model-viewer auto-rotate 
+                      camera-controls 
+                      shadow-intensity="1" 
+                      alt="Pergolesi Side Chair" 
+                      background-color="#70BCD1">
+                        
+        </model-viewer>
+      </td>
+      <td>
+        <table>
+          <tr><td><img width=50px src="pergolesi-side-chair.jpg"></td></tr>
+          <tr><td><img width=50px src="pergolesi-side-chair.jpg"></td></tr>
+          <tr><td><img width=50px src="pergolesi-side-chair.jpg"></td></tr>
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <div id="anchor-container">
+          <a id="view-in-ar-anchor" rel="ar">
+            Tap to View in your space
+            <img />  <!-- this first child image is needed for iOS QuickLook -->
+          </a>
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <br>
+  <p><b>Pergolesi Side Chair</b></p>
+  <p>This is a simulated product page for an online retailer showing a product in both 2D, 3D and Augmented Reality.</p>
+
+  <div id="attribution">
+    The Pergolesi Side Chair <a href="https://3d.si.edu/explorer/pergolesi-side-chair">model</a> is licensed under CC0 (no rights reserved) and the <a href="http://cprhw.tt/o/2BQfp/">image</a> is public domain, courtesy of The Smithsonian Institute.
+  </div>
+
+  <script>
+    const showQRCode = () => {
+      console.log("Show QRCode");
+      const div = document.getElementById("qrcode-container");
+      div.style.display = "block";
+    };
+
+    // Detect platform - if mobile platform, link to the appropriate 3D model, otherwise show a qrcode for a mobile phone to point
+    // to this page
+    const anchor = document.getElementById('view-in-ar-anchor');
+    if (anchor.relList.supports('ar')) {
+      // iOS - use usdz and QuickLook
+      anchor.setAttribute('href', `${window.location.origin}/usdz/pergolesi-side-chair.usdz`);
+    } else if (/android/i.test(navigator.userAgent)) {
+      // Android - use glb and model-viewer
+      const intent = `intent://${window.location.host}/glb/pergolesi-side-chair.glb?mode=ar_only#Intent;scheme=https;package=com.google.ar.core;action=android.intent.action.VIEW;S.browser_fallback_url=${window.location.href};end;` 
+      console.log(intent);
+      anchor.setAttribute('href', intent);
+    } else {
+      // on Desktop - show QR code to this page to access on mobile
+      console.log(`Creating QRCode for ${window.location.href}`);
+      const div = document.querySelector('#qrcode');
+      const qrcode = new QRCode(div, {width:250, height:250});
+      qrcode.makeCode(window.location.href);
+      anchor.setAttribute('onclick', 'showQRCode()');
+    }
+
+    const modelviewer = document.querySelector('model-viewer');
+    modelviewer.setAttribute('src', `${window.location.origin}/glb/pergolesi-side-chair.glb`);
+  </script>
+</body>
+</html>

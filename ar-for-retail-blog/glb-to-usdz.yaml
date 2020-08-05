@@ -1,0 +1,533 @@
+#
+# Copyright Amazon.com, Inc. and its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See the LICENSE accompanying this file
+# for the specific language governing permissions and limitations under
+# the License.
+#
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "An example template with an IAM role for a Lambda state machine."
+Parameters:
+  BucketName:
+    Type: String
+    Default: converted-models
+
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.192.10.0/24
+
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.10.0/24
+
+Resources:
+#
+# Create the VPC structures
+#
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref 'AWS::StackName'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref 'AWS::StackName'
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Public Subnet (AZ1)
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Public Routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  NoIngressSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "no-ingress-sg"
+      GroupDescription: "Security group with no ingress rule"
+      VpcId: !Ref VPC
+
+#
+# Create the ECS cluster and task
+#
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join ['', [!Ref 'AWS::StackName', Cluster]]
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    # Makes sure the log group is created before it is used.
+    # DependsOn: LogGroup
+    Properties:
+      # Name of the task definition. Subsequent versions of the task definition are grouped together under this name.
+      Family: !Join ['', [!Ref 'AWS::StackName', TaskDefinition]]
+      # awsvpc is required for Fargate
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      # 256 (.25 vCPU) - Available memory values: 0.5GB, 1GB, 2GB
+      # 512 (.5 vCPU) - Available memory values: 1GB, 2GB, 3GB, 4GB
+      # 1024 (1 vCPU) - Available memory values: 2GB, 3GB, 4GB, 5GB, 6GB, 7GB, 8GB
+      # 2048 (2 vCPU) - Available memory values: Between 4GB and 16GB in 1GB increments
+      # 4096 (4 vCPU) - Available memory values: Between 8GB and 30GB in 1GB increments
+      Cpu: "256"
+      # 0.5GB, 1GB, 2GB - Available cpu values: 256 (.25 vCPU)
+      # 1GB, 2GB, 3GB, 4GB - Available cpu values: 512 (.5 vCPU)
+      # 2GB, 3GB, 4GB, 5GB, 6GB, 7GB, 8GB - Available cpu values: 1024 (1 vCPU)
+      # Between 4GB and 16GB in 1GB increments - Available cpu values: 2048 (2 vCPU)
+      # Between 8GB and 30GB in 1GB increments - Available cpu values: 4096 (4 vCPU)
+      Memory: 0.5GB
+      # A role needed by ECS.
+      # "The ARN of the task execution role that containers in this task can assume. All containers in this task are granted the permissions that are specified in this role."
+      # "There is an optional task execution IAM role that you can specify with Fargate to allow your Fargate tasks to make API calls to Amazon ECR."
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      # "The Amazon Resource Name (ARN) of an AWS Identity and Access Management (IAM) role that grants containers in the task permission to call AWS APIs on your behalf."
+      TaskRoleArn: !Ref TaskRole
+      # Container definitions 
+      ContainerDefinitions:
+        - Name: !Ref 'AWS::StackName'
+          Image: 'awsleochan/docker-glb-to-usdz-to-s3'
+          #PortMappings:
+          #  - HostPort: 8082
+          #  - ContainerPort: 8082
+          #  - Protocol: tcp
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: INPUT_GLB_S3_FILEPATH
+              Value: !Join ['', [!Join ['-', [!Sub '${AWS::StackName}-${BucketName}', !Select [0, !Split ['-', !Select [2, !Split [/, !Ref 'AWS::StackId' ]]]] ]], '/glb/pergolesi.glb'] ]
+            - Name: OUTPUT_S3_PATH
+              Value: !Join ['', [!Join ['-', [!Sub '${AWS::StackName}-${BucketName}', !Select [0, !Split ['-', !Select [2, !Split [/, !Ref 'AWS::StackId' ]]]] ]], '/usdz'] ]
+            - Name: OUTPUT_USDZ_FILE
+              Value: pergolesi.usdz
+          # Send logs to CloudWatch Logs
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+  # A role needed by ECS
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref 'AWS::StackName', ExecutionRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+  # A role for the containers
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref 'AWS::StackName', TaskRole]]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/CloudWatchLogsFullAccess'
+  Service:
+    Type: AWS::ECS::Service
+    Properties: 
+      ServiceName: !Join ['', [!Ref 'AWS::StackName', Service]]
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 0
+      LaunchType: FARGATE
+      NetworkConfiguration: 
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet1
+          SecurityGroups:
+            - !Ref NoIngressSecurityGroup
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', [/ecs/, !Ref 'AWS::StackName', TaskDefinition]]
+
+#
+# Create the S3 bucket and Cloud Front
+#
+  S3BucketForModelConvert:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - ProcessingLambdaPermission
+    Properties:
+      BucketName: !Join ['-', [!Sub '${AWS::StackName}-${BucketName}', !Select [0, !Split ['-', !Select [2, !Split [/, !Ref 'AWS::StackId' ]]]] ]]
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt S3ModelConvertTriggerLambda.Arn
+            Filter:
+              S3Key:
+                Rules:
+                - Name: prefix
+                  Value: glb/
+                - Name: suffix
+                  Value: .glb
+  ProcessingLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref S3ModelConvertTriggerLambda
+      Principal: s3.amazonaws.com
+      SourceArn: !Join ['', ['arn:aws:s3:::', !Join ['-', [!Sub '${AWS::StackName}-${BucketName}', !Select [0, !Split ['-', !Select [2, !Split [/, !Ref 'AWS::StackId' ]]]] ]]  ] ]
+      SourceAccount: !Ref AWS::AccountId
+
+  BucketPolicyCloudFrontRead:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref S3BucketForModelConvert
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Principal:
+            CanonicalUser: !GetAtt CloudFrontOriginAccessIdentity.S3CanonicalUserId
+          Action: 's3:GetObject'
+          Effect: Allow
+          Resource: !Sub '${S3BucketForModelConvert.Arn}/*'
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+        - DomainName: !GetAtt S3BucketForModelConvert.RegionalDomainName
+          Id: ARS3Origin
+          S3OriginConfig:
+            OriginAccessIdentity: !Join ['', ['origin-access-identity/cloudfront/', !Ref CloudFrontOriginAccessIdentity]]
+        Enabled: true
+        DefaultCacheBehavior:
+          AllowedMethods:
+          - DELETE
+          - GET
+          - HEAD
+          - OPTIONS
+          - PATCH
+          - POST
+          - PUT
+          TargetOriginId: ARS3Origin
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: allow-all
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+  CloudFrontOriginAccessIdentity:
+    Type: 'AWS::CloudFront::CloudFrontOriginAccessIdentity'
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Ref S3BucketForModelConvert
+
+#
+# Create the lambda trigger
+#
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: allowLogging
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - logs:*
+              Resource: arn:aws:logs:*:*:*
+        - PolicyName: getObjects
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - s3:GetObject
+              Resource: !Join ['', ['arn:aws:s3:::', !Join ['-', [!Sub '${AWS::StackName}-${BucketName}', !Select [0, !Split ['-', !Select [2, !Split [/, !Ref 'AWS::StackId' ]]]] ]], '/*'  ] ]
+
+        - PolicyName: runECS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - ecs:RunTask
+              Resource: "arn:aws:ecs:*:*:task-definition/*"
+        - PolicyName: passRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - iam:PassRole
+              Resource: "*"
+  S3ModelConvertTriggerLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.7
+      Role: !GetAtt [ LambdaExecutionRole, Arn ]
+      Handler: index.lambda_handler
+      Timeout: 60
+      Environment:
+        Variables:
+          CLUSTER_NAME: !Ref Cluster
+          TASK_DEFINITION: !Ref TaskDefinition
+          CONTAINER_NAME: !Ref AWS::StackName
+          SECURITY_GROUP: !Ref NoIngressSecurityGroup
+          SUBNET: !Ref PublicSubnet1
+      Code:
+        ZipFile: |
+          # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+          # SPDX-License-Identifier: MIT
+          import boto3
+          import os
+
+          # instantiate the AWS SDK
+          s3_client = boto3.client('s3') 
+          ecs = boto3.client('ecs')
+
+          # this function will specify parameters that are required for the model conversion
+          # function.  The environment variables are populated by the CloudFormation template
+          def runEcsTask(s3_img_url, filename):
+              response = ecs.run_task(
+                  cluster=os.environ['CLUSTER_NAME'],
+                  count=1,
+                  launchType='FARGATE',
+                  networkConfiguration={
+                      'awsvpcConfiguration': {
+                          'subnets': [
+                              os.environ['SUBNET'],
+                          ],
+                          'securityGroups': [
+                              os.environ['SECURITY_GROUP'],
+                          ],
+                          'assignPublicIp': 'ENABLED'
+                      }
+                  },
+                  overrides={
+                      'containerOverrides': [
+                          {
+                              'name': os.environ['CONTAINER_NAME'],
+                              'environment': [
+                                  {
+                                      'name': 'INPUT_GLB_S3_FILEPATH',
+                                      'value': s3_img_url
+                                  },
+                                  {
+                                      'name': 'OUTPUT_USDZ_FILE',
+                                      'value': filename
+                                  },
+                              ],
+                          },
+                      ],
+                  },
+                  taskDefinition=os.environ['TASK_DEFINITION']
+              )
+              return response
+              
+          def lambda_handler(event, context):
+              # It is possible for this lambda to be triggered when multiple files are uploaded
+              #   so we need to iterate through each file in our triggering event
+              for record in event['Records']:
+                  # extract the S3 bucket name
+                  # the key is the 'name' of the object uploaded to S3
+                  bucket = record['s3']['bucket']['name']
+                  key = record['s3']['object']['key']
+                  print('bucket:' + bucket + ' key:' + key)
+                  
+                  # create the parameters that are required by the model conversion container
+                  s3_img_url = bucket + '/' + key
+                  filename = key[key.index('/')+1:key.index('.')] + '.usdz'
+                  
+                  # run the task.  this occurs asynchronously.
+                  res = runEcsTask(s3_img_url, filename)
+                  print(res)
+        
+
+                  
+      Description: Trigger Model Convert when GLB file is uploaded to S3
+#
+# Lambda function for copying initial resources into S3 bucket
+#
+  PopulateS3LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+  
+  PopulateS3:
+    Type: Custom::PopulateS3Lambda
+    Properties:
+      ServiceToken: !GetAtt PopulateS3Lambda.Arn
+
+  PopulateS3Lambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.7
+      Role: !GetAtt [ PopulateS3LambdaRole, Arn ]
+      Handler: index.lambda_handler
+      Timeout: 60
+      Environment:
+        Variables:
+          BUCKET_NAME: !Join ['-', [!Sub '${AWS::StackName}-${BucketName}', !Select [0, !Split ['-', !Select [2, !Split [/, !Ref 'AWS::StackId' ]]]] ]]
+      Code:
+        ZipFile: |
+          # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+          # SPDX-License-Identifier: MIT
+          import boto3 
+          import os
+          import json
+          import cfnresponse
+
+          # instantiate the AWS SDK
+          s3 = boto3.resource('s3') 
+
+          def write_object(bucket, object_key, content):
+              print('write_object ' + bucket + ' ' + object_key + ' ' + content)
+              obj = s3.Object(bucket,object_key)
+              obj.put(Body=content)
+              return content
+
+          def copy_object(srcBucket, srcKey, destBucket, destKey):
+              print('copy_object ' + srcBucket + ' ' + srcKey + ' to ' + destBucket + ' ' + destKey)
+              copy_source = {
+                'Bucket': srcBucket,
+                'Key': srcKey
+              }
+              bucket = s3.Bucket(destBucket)
+              bucket.copy(copy_source, destKey)
+
+          def lambda_handler(event, context):
+              print('lambda started',event)
+              bucket = os.environ['BUCKET_NAME']
+              if event['RequestType'] == 'Delete':
+                responseData = {}
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)   
+              else:
+                write_object(bucket, 'glb/readme.txt', 'This location is where you upload the source GLB files')
+                write_object(bucket, 'usdz/readme.txt', 'This location contains the converted USDZ files')
+                write_object(bucket, 'html/readme.txt', 'This location contains the HTML templates used to display USDZ files')
+                copy_object('heyd-cloudfront', 'ar-templates/sampleProductPage.html', bucket, 'html/sampleProductPage.html')
+                copy_object('heyd-cloudfront', 'ar-templates/pergolesi-side-chair.jpg', bucket, 'html/pergolesi-side-chair.jpg')
+
+                responseValue = 'objects created'
+                responseData = {}
+                responseData['Data'] = responseValue
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)   
+      Description: Trigger Model Convert when GLB file is uploaded to S3
+Outputs:
+  VPC:
+    Description: A reference to the created VPC
+    Value: !Ref VPC
+
+  SampleARPage:
+    Description: URL location to view our sample AR Model
+    Value: !Join ['', [!GetAtt CloudFrontDistribution.DomainName, '/html/sampleProductPage.html']]
+
+  Lambda:
+    Value: !Ref 'S3ModelConvertTriggerLambda'
+    Description: Name of Lambda function to trigger Model conversion
+
+  S3Bucket:
+    Value: !Ref S3BucketForModelConvert
+    Description: S3 bucket for uploading the GLB file
+
+  ECSCluster:
+    Value: !Ref Cluster
+    Description: Name of the ECS cluster
+
+  ECSTaskDefinition:
+    Value: !Ref TaskDefinition
+    Description: Name of the ECS task for model conversion
+
+  # CloudFront:
+  #   Value: !Join ['', [!GetAtt CloudFrontDistribution.DomainName, '/html/artemplate.html']]
+  #   Description: URL for viewing the converted USDZ file
