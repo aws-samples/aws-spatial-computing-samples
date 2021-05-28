@@ -214,8 +214,6 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      VersioningConfiguration:
-        Status: Enabled
       NotificationConfiguration:
         LambdaConfigurations:
           - Event: s3:ObjectCreated:*
